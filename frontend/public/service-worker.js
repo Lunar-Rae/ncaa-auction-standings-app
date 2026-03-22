@@ -1,4 +1,4 @@
-const CACHE_NAME = "ncaa-auction-standings-v1";
+const CACHE_NAME = "ncaa-auction-standings-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/app-icon.svg", "/pwa-192.png", "/pwa-512.png", "/apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {
@@ -18,6 +18,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
+  const url = new URL(request.url);
 
   if (request.mode === "navigate") {
     event.respondWith(
@@ -26,7 +27,12 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (new URL(request.url).origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin) return;
+
+  if (url.pathname.startsWith("/api/")) {
+    event.respondWith(fetch(request, { cache: "no-store" }));
+    return;
+  }
 
   event.respondWith(
     caches.match(request).then((cached) => {

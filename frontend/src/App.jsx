@@ -3819,6 +3819,7 @@ export default function App() {
   const apiFetch = async (endpoint, options = {}) => {
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       credentials: "include",
+      cache: "no-store",
       ...options,
       headers: {
         ...(options.headers || {}),
@@ -3933,7 +3934,7 @@ export default function App() {
     let mounted = true;
     const restoreSession = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/access/session`, { credentials: "include" });
+        const res = await fetch(`${API_BASE_URL}/api/access/session`, { credentials: "include", cache: "no-store" });
         const data = await res.json().catch(() => ({}));
         if (!mounted) return;
         if (res.ok) {
