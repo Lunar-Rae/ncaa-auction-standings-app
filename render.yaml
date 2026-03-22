@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ncaa-auction-standings-app
+    env: node
+    rootDir: .
+    buildCommand: npm install && npm --prefix frontend install && npm --prefix backend install && npm run build
+    startCommand: node backend/server.js
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PORT
+        value: 10000
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

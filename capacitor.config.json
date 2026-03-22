@@ -1,0 +1,6 @@
+{
+  "appId": "com.ariel.ncaaauctionstandings",
+  "appName": "NCAA Auction",
+  "webDir": "frontend/dist",
+  "bundledWebRuntime": false
+}

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">NCAA Auction Standings App Icon</title>
+  <desc id="desc">Basketball tournament app icon with bracket-inspired card layout.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e3a8a" />
+    </linearGradient>
+    <linearGradient id="ball" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fb923c" />
+      <stop offset="100%" stop-color="#ea580c" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+  <rect x="88" y="92" width="336" height="328" rx="36" fill="#f8fafc" opacity="0.98" />
+  <rect x="116" y="124" width="150" height="22" rx="11" fill="#cbd5e1" />
+  <rect x="116" y="164" width="118" height="18" rx="9" fill="#e2e8f0" />
+  <rect x="116" y="198" width="96" height="18" rx="9" fill="#e2e8f0" />
+  <rect x="116" y="254" width="280" height="16" rx="8" fill="#dbeafe" />
+  <rect x="116" y="286" width="244" height="16" rx="8" fill="#dcfce7" />
+  <rect x="116" y="318" width="210" height="16" rx="8" fill="#fde68a" />
+  <circle cx="346" cy="182" r="52" fill="url(#ball)" />
+  <path d="M346 130c-18 15-28 33-28 52s10 37 28 52m0-104c18 15 28 33 28 52s-10 37-28 52M294 182h104m-92-34c14 9 26 20 36 34-10 14-22 25-36 34m76-68c-14 9-26 20-36 34 10 14 22 25 36 34" fill="none" stroke="#7c2d12" stroke-linecap="round" stroke-width="10"/>
+  <path d="M160 402h192" stroke="#cbd5e1" stroke-linecap="round" stroke-width="14" />
+</svg>
