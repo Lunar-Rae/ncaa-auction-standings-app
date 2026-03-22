@@ -21,15 +21,12 @@ const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const SESSION_COOKIE_NAME = "league_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 180;
-const LOGIN_WINDOW_MS = 1000 * 60 * 15;
-const MAX_LOGIN_ATTEMPTS = 8;
 const SESSION_SECRET = process.env.ACCESS_SESSION_SECRET || (process.env.NODE_ENV === "production" ? "" : "dev-only-league-session-secret");
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
   : null;
-const loginAttempts = new Map();
 const fantasyTeams = [
   { id: "mike-bob", name: "Mike / Bob", members: ["Mike W.", "Bob"] },
   { id: "solomon-brenden", name: "Solomon / Brenden", members: ["Solomon", "Brenden"] },
@@ -52,41 +49,6 @@ const leagueMemberAccounts = fantasyTeams.flatMap((team) =>
 );
 const leagueAccessAccounts = [...leagueMemberAccounts, ...adminAccounts];
 const accountMap = new Map(leagueAccessAccounts.map((account) => [account.id, account]));
-
-function loadAccessPins() {
-  const raw = process.env.ACCESS_PINS_JSON || "";
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return Object.fromEntries(
-          Object.entries(parsed)
-            .map(([key, value]) => [String(key), cleanText(value, 32)])
-            .filter(([, value]) => value)
-        );
-      }
-    } catch (error) {
-      console.error("ACCESS_PINS_JSON is not valid JSON:", error);
-    }
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    return {
-      "mike-bob": "1101",
-      "solomon-brenden": "1102",
-      "dan-chris": "1103",
-      "ryan-brian": "1104",
-      "mikea-gregg": "1105",
-      "josh-gabe": "1106",
-      "admin-ariel": "9901",
-      "admin-commissioner": "9902",
-    };
-  }
-
-  return {};
-}
-
-const accessPins = loadAccessPins();
 
 const teamNameMap = {
   "Connecticut Huskies": "UConn",
@@ -267,41 +229,6 @@ function requireAuth(req, res, next) {
   next();
 }
 
-function loginAttemptKey(req) {
-  return req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() || req.socket.remoteAddress || "unknown";
-}
-
-function isRateLimited(key) {
-  const current = loginAttempts.get(key);
-  if (!current) return false;
-  if (current.resetAt <= Date.now()) {
-    loginAttempts.delete(key);
-    return false;
-  }
-  return current.count >= MAX_LOGIN_ATTEMPTS;
-}
-
-function recordFailedAttempt(key) {
-  const current = loginAttempts.get(key);
-  if (!current || current.resetAt <= Date.now()) {
-    loginAttempts.set(key, { count: 1, resetAt: Date.now() + LOGIN_WINDOW_MS });
-    return;
-  }
-  current.count += 1;
-}
-
-function clearFailedAttempts(key) {
-  loginAttempts.delete(key);
-}
-
-function safePinEqual(left, right) {
-  if (!left || !right) return false;
-  const a = Buffer.from(String(left));
-  const b = Buffer.from(String(right));
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
 function loginProfileForAccount(account) {
   return {
     accountId: account.id,
@@ -309,11 +236,6 @@ function loginProfileForAccount(account) {
     role: account.role,
     teamId: account.teamId || null,
   };
-}
-
-function expectedPinForAccount(account) {
-  if (!account) return "";
-  return cleanText(accessPins[account.role === "admin" ? account.id : account.teamId], 32);
 }
 
 function broadcastNamesFromCompetition(comp) {
@@ -481,24 +403,14 @@ app.post("/api/access/login", (req, res) => {
     return;
   }
 
-  const key = loginAttemptKey(req);
-  if (isRateLimited(key)) {
-    res.status(429).json({ error: "Too many login attempts. Wait a bit and try again." });
-    return;
-  }
-
   const accountId = cleanText(req.body?.accountId, 80);
-  const accessPin = cleanText(req.body?.accessPin, 32);
   const account = accountMap.get(accountId);
-  const expectedPin = expectedPinForAccount(account);
 
-  if (!account || !accessPin || !expectedPin || !safePinEqual(accessPin, expectedPin)) {
-    recordFailedAttempt(key);
-    res.status(401).json({ error: "That team/admin PIN is wrong." });
+  if (!account) {
+    res.status(401).json({ error: "That member profile is not allowed." });
     return;
   }
 
-  clearFailedAttempts(key);
   const profile = loginProfileForAccount(account);
   setSessionCookie(res, profile);
   res.json({ profile });

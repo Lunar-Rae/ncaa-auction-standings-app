@@ -3241,7 +3241,6 @@ function AccessSetupGate({ isMobile, onComplete }) {
   const [roleType, setRoleType] = useState("member");
   const [selectedTeamId, setSelectedTeamId] = useState(fantasyTeams[0]?.id || "");
   const [selectedAccountId, setSelectedAccountId] = useState("");
-  const [accessPin, setAccessPin] = useState("");
   const [devicePin, setDevicePin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
   const [loading, setLoading] = useState(false);
@@ -3268,10 +3267,6 @@ function AccessSetupGate({ isMobile, onComplete }) {
       setError("Select your team and name first.");
       return;
     }
-    if (!/^\d{4,8}$/.test(accessPin.trim())) {
-      setError(`${roleType === "admin" ? "Admin" : "Team"} access code must be 4 to 8 digits.`);
-      return;
-    }
     if (!/^\d{4,8}$/.test(cleanPin)) {
       setError("Create a 4 to 8 digit PIN for this device.");
       return;
@@ -3287,12 +3282,10 @@ function AccessSetupGate({ isMobile, onComplete }) {
     try {
       await onComplete({
         accountId: account.id,
-        accessPin: accessPin.trim(),
         devicePin: cleanPin,
       });
     } catch (submitError) {
       setError(submitError.message || "Unable to enter the app right now.");
-      setAccessPin("");
     } finally {
       setLoading(false);
     }
@@ -3305,7 +3298,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
           <div style={{ fontSize: 30, lineHeight: 1 }}>🏀</div>
           <div style={{ fontWeight: 900, fontSize: isMobile ? 24 : 28, color: theme.text }}>League Access</div>
           <div style={{ color: theme.muted, fontSize: 14, lineHeight: 1.5 }}>
-            Pick your team and your name, enter the team access code once, then create your own PIN for this device. After that, future unlocks on this device use only your PIN.
+            Pick your team and your name, then create your own PIN for this device. After that, future unlocks on this device use only your PIN.
           </div>
         </div>
 
@@ -3377,23 +3370,6 @@ function AccessSetupGate({ isMobile, onComplete }) {
             </select>
           </div>
 
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
-              {roleType === "admin" ? "Admin Access Code" : "Team Access Code"}
-            </label>
-            <input
-              type="password"
-              inputMode="numeric"
-              value={accessPin}
-              onChange={(event) => {
-                setAccessPin(event.target.value.replace(/\D/g, "").slice(0, 8));
-                setError("");
-              }}
-              placeholder="Required once"
-              style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
-            />
-          </div>
-
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
             <div>
               <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
@@ -3430,7 +3406,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
           </div>
 
           <div style={{ color: theme.subtleText, fontSize: 12, lineHeight: 1.5 }}>
-            Only saved league members and admin profiles can enter. The team/admin access code is checked by the server once, and the PIN you create is what unlocks this device after that.
+            Only saved league members and admin profiles are listed here. Once you pick your profile and create a PIN, this device remembers you.
           </div>
 
           {error && <div style={{ color: "#dc2626", fontSize: 13, fontWeight: 700 }}>{error}</div>}
@@ -3451,7 +3427,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
             }}
             disabled={loading}
           >
-            {loading ? "Checking League Access..." : "Enter App"}
+            {loading ? "Setting Up..." : "Enter App"}
           </button>
         </div>
       </Card>
@@ -3633,7 +3609,7 @@ function AdminView({
         </div>
 
         <div style={{ marginTop: 12, color: "#94a3b8", fontSize: 12 }}>
-          The saved league identity lives on this device. The PIN you create is what unlocks this phone or browser after your first approved login.
+          The saved league identity lives on this device. The PIN you create is what unlocks this phone or browser after your first login.
         </div>
       </Card>
 
@@ -3863,11 +3839,11 @@ export default function App() {
   const handleOpenComments = () => {
     setTab("Trash Talk");
   };
-  const completeAccessSetup = async ({ accountId, accessPin, devicePin }) => {
+  const completeAccessSetup = async ({ accountId, devicePin }) => {
     const res = await apiFetch("/api/access/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accountId, accessPin }),
+      body: JSON.stringify({ accountId }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -4209,7 +4185,7 @@ export default function App() {
           <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 28 }}>
             <Card style={{ width: "100%", maxWidth: 380, padding: 22, borderRadius: 24, textAlign: "center" }}>
               <div style={{ fontSize: 28, marginBottom: 10 }}>🔒</div>
-              <div style={{ fontSize: 18, fontWeight: 900, color: theme.text }}>Checking League Access</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: theme.text }}>Loading League Access</div>
             </Card>
           </div>
         </>
