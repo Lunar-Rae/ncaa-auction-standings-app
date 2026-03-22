@@ -189,7 +189,7 @@ function mergeCommentList(current, incoming) {
 }
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
-const ROUND_POINTS = { FF: 3, R64: 3, R32: 3, S16: 4, E8: 4, F4: 5, CH: 6 };
+const ROUND_POINTS = { FF: 0, R64: 3, R32: 3, S16: 4, E8: 4, F4: 5, CH: 6 };
 const roundLabels = { FF: "First Four", R64: "Round of 64", R32: "Round of 32", S16: "Sweet 16", E8: "Elite 8", F4: "Final Four", CH: "Championship" };
 const ROUND_GAME_COUNTS = { FF: 2, R64: 32, R32: 16, S16: 8, E8: 4, F4: 2, CH: 1 };
 const TOTAL_TOURNAMENT_POINTS = Object.entries(ROUND_POINTS).reduce(
