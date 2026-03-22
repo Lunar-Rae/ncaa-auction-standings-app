@@ -3269,15 +3269,15 @@ function AccessSetupGate({ isMobile, onComplete }) {
       return;
     }
     if (!/^\d{4,8}$/.test(accessPin.trim())) {
-      setError(`${roleType === "admin" ? "Admin" : "Team"} PIN must be 4 to 8 digits.`);
+      setError(`${roleType === "admin" ? "Admin" : "Team"} access code must be 4 to 8 digits.`);
       return;
     }
-    if (cleanPin && !/^\d{4,8}$/.test(cleanPin)) {
-      setError("Device PIN must be 4 to 8 digits.");
+    if (!/^\d{4,8}$/.test(cleanPin)) {
+      setError("Create a 4 to 8 digit PIN for this device.");
       return;
     }
     if (cleanPin !== confirmPin.trim()) {
-      setError("Device PIN confirmation does not match.");
+      setError("Your new PIN confirmation does not match.");
       return;
     }
 
@@ -3305,7 +3305,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
           <div style={{ fontSize: 30, lineHeight: 1 }}>🏀</div>
           <div style={{ fontWeight: 900, fontSize: isMobile ? 24 : 28, color: theme.text }}>League Access</div>
           <div style={{ color: theme.muted, fontSize: 14, lineHeight: 1.5 }}>
-            Pick your team and your name, then enter the league PIN tied to that team or admin profile. After that this device remembers you, and if you set a device PIN, future unlocks on this device are PIN-only.
+            Pick your team and your name, enter the team access code once, then create your own PIN for this device. After that, future unlocks on this device use only your PIN.
           </div>
         </div>
 
@@ -3379,7 +3379,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
 
           <div>
             <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
-              {roleType === "admin" ? "Admin PIN" : "Team PIN"}
+              {roleType === "admin" ? "Admin Access Code" : "Team Access Code"}
             </label>
             <input
               type="password"
@@ -3389,7 +3389,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
                 setAccessPin(event.target.value.replace(/\D/g, "").slice(0, 8));
                 setError("");
               }}
-              placeholder="Required"
+              placeholder="Required once"
               style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
             />
           </div>
@@ -3397,7 +3397,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
             <div>
               <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
-                Device PIN
+                Create Your PIN
               </label>
               <input
                 type="password"
@@ -3407,13 +3407,13 @@ function AccessSetupGate({ isMobile, onComplete }) {
                   setDevicePin(event.target.value.replace(/\D/g, "").slice(0, 8));
                   setError("");
                 }}
-                placeholder="Optional"
+                placeholder="Required"
                 style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
               />
             </div>
             <div>
               <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
-                Confirm PIN
+                Confirm Your PIN
               </label>
               <input
                 type="password"
@@ -3423,14 +3423,14 @@ function AccessSetupGate({ isMobile, onComplete }) {
                   setConfirmPin(event.target.value.replace(/\D/g, "").slice(0, 8));
                   setError("");
                 }}
-                placeholder="Optional"
+                placeholder="Required"
                 style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
               />
             </div>
           </div>
 
           <div style={{ color: theme.subtleText, fontSize: 12, lineHeight: 1.5 }}>
-            Only saved league members and admin profiles can enter. The team/admin PIN is checked by the server. Device PIN is local to this phone and only unlocks this device after you already belong in the league.
+            Only saved league members and admin profiles can enter. The team/admin access code is checked by the server once, and the PIN you create is what unlocks this device after that.
           </div>
 
           {error && <div style={{ color: "#dc2626", fontSize: 13, fontWeight: 700 }}>{error}</div>}
@@ -3571,13 +3571,13 @@ function AdminView({
           </div>
           <div>
             <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: "#94a3b8", display: "block", marginBottom: 6 }}>
-              Device PIN
+              Your PIN
             </label>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
                 onClick={() => {
-                  const nextPin = window.prompt(hasDevicePin ? "Enter a new 4-8 digit device PIN" : "Set a 4-8 digit device PIN");
+                  const nextPin = window.prompt(hasDevicePin ? "Enter a new 4-8 digit PIN for this device" : "Create a 4-8 digit PIN for this device");
                   if (!nextPin) return;
                   onDevicePinSave(nextPin);
                 }}
@@ -3633,7 +3633,7 @@ function AdminView({
         </div>
 
         <div style={{ marginTop: 12, color: "#94a3b8", fontSize: 12 }}>
-          The saved league identity lives on this device. Device PIN is optional and only locks this phone or browser.
+          The saved league identity lives on this device. The PIN you create is what unlocks this phone or browser after your first approved login.
         </div>
       </Card>
 
@@ -3899,7 +3899,7 @@ export default function App() {
   const saveDevicePin = (nextPin) => {
     const cleanPin = String(nextPin || "").replace(/\D/g, "").slice(0, 8);
     if (!/^\d{4,8}$/.test(cleanPin)) {
-      window.alert("Device PIN must be 4 to 8 digits.");
+      window.alert("PIN must be 4 to 8 digits.");
       return;
     }
     setStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, cleanPin);
