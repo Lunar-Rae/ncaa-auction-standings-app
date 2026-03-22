@@ -5,14 +5,15 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const MOBILE_BREAKPOINT = 760;
 const TABLET_BREAKPOINT = 1100;
 const COMMENT_POLL_MS = 10000;
-const COMMENT_USER_STORAGE_KEY = "leaderboardCommentUserName";
-const COMMENT_TEAM_STORAGE_KEY = "leaderboardCommentTeamId";
 const COMMENT_CLIENT_ID_STORAGE_KEY = "leaderboardCommentClientId";
 const COMMENT_LAST_SEEN_STORAGE_KEY = "leaderboardCommentLastSeenAt";
 const NOTIFICATION_SETTINGS_STORAGE_KEY = "leaderboardNotificationSettings";
 const NOTIFICATIONS_STORAGE_KEY = "leaderboardNotifications";
 const TEXT_SIZE_STORAGE_KEY = "leaderboardTextSize";
 const THEME_STORAGE_KEY = "leaderboardTheme";
+const ACCESS_PROFILE_STORAGE_KEY = "leaderboardAccessProfile";
+const ACCESS_DEVICE_PIN_STORAGE_KEY = "leaderboardAccessDevicePin";
+const ACCESS_UNLOCKED_SESSION_KEY = "leaderboardAccessUnlocked";
 const LEAGUE_TIME_ZONE = "America/Los_Angeles";
 const TEXT_SIZE_OPTIONS = {
   small: { label: "Small", scale: 0.95 },
@@ -130,8 +131,29 @@ function getStoredJson(key, fallback) {
   }
 }
 
+function getSessionValue(key, fallback = "") {
+  try {
+    return sessionStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function setSessionValue(key, value) {
+  try {
+    if (value) sessionStorage.setItem(key, value);
+    else sessionStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 function createClientId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizePersonName(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function normalizeCommentRecord(record) {
@@ -200,6 +222,41 @@ const initialFantasyTeams = [
   { id: "josh-gabe", name: "Josh / Gabe", members: ["Josh", "Gabe"], budget: 100, pin: generatePin(), privateNotes: [] },
 ];
 const fantasyTeams = initialFantasyTeams;
+const adminAccounts = [
+  { id: "admin-ariel", name: "Ariel", role: "admin" },
+  { id: "admin-lunar-rae", name: "Lunar Rae", role: "admin" },
+  { id: "admin-commissioner", name: "Commissioner", role: "admin" },
+];
+const leagueMemberAccounts = fantasyTeams.flatMap((team) =>
+  team.members.map((member) => ({
+    id: `${team.id}:${member.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    name: member,
+    teamId: team.id,
+    role: "member",
+  }))
+);
+const leagueAccessAccounts = [...leagueMemberAccounts, ...adminAccounts];
+
+function accountLabel(account) {
+  if (!account) return "";
+  return account.role === "admin" ? `${account.name} · Admin` : `${account.name} · ${ownerName(account.teamId)}`;
+}
+
+function accountById(accountId) {
+  return leagueAccessAccounts.find((account) => account.id === accountId) || null;
+}
+
+function normalizeAccessProfile(record) {
+  if (!record || typeof record !== "object") return null;
+  const account = accountById(record.accountId);
+  if (!account) return null;
+  return {
+    accountId: account.id,
+    name: account.name,
+    role: account.role,
+    teamId: account.teamId || null,
+  };
+}
 
 // ─── Auction Intel ────────────────────────────────────────────────────────────
 const auctionIntel = [
@@ -1291,7 +1348,7 @@ function LeaderboardChat({
 
   const threadComments = comments;
   const cleanUserName = commentUserName.trim();
-  const canPost = Boolean(cleanUserName && commentTeam);
+  const canPost = Boolean(cleanUserName);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -1301,10 +1358,6 @@ function LeaderboardChat({
 
     if (!cleanUserName) {
       setSubmitError("Add your name before posting.");
-      return;
-    }
-    if (!commentTeam) {
-      setSubmitError("Pick your team before posting.");
       return;
     }
     if (!cleanMessage) {
@@ -1627,7 +1680,7 @@ function ChatComposer({
   const [isFocused, setIsFocused] = useState(false);
 
   const cleanUserName = commentUserName.trim();
-  const canPost = Boolean(cleanUserName && commentTeam);
+  const canPost = Boolean(cleanUserName);
   const composerExpanded = isFocused || Boolean(replyTarget) || Boolean(editingComment) || Boolean(String(message || "").trim());
   const mentionEntities = useMemo(
     () => buildMentionEntities(comments, commentUserName),
@@ -1650,10 +1703,6 @@ function ChatComposer({
 
     if (!cleanUserName) {
       setSubmitError("Add your name before posting.");
-      return;
-    }
-    if (!commentTeam) {
-      setSubmitError("Pick your team before posting.");
       return;
     }
     if (!cleanMessage) {
@@ -3189,16 +3238,270 @@ function PrivateView({ activeTeam, onUnlock, isMobile, isTablet }) {
   return <TeamNotesView team={activeTeam} />;
 }
 
+function AccessSetupGate({ isMobile, onComplete }) {
+  const theme = useTheme();
+  const [roleType, setRoleType] = useState("member");
+  const [selectedTeamId, setSelectedTeamId] = useState(fantasyTeams[0]?.id || "");
+  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [devicePin, setDevicePin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [error, setError] = useState("");
+
+  const teamOptions = fantasyTeams.map((team) => ({
+    id: team.id,
+    label: team.name,
+    accounts: leagueMemberAccounts.filter((account) => account.teamId === team.id),
+  }));
+  const visibleAccounts = roleType === "admin"
+    ? adminAccounts
+    : (teamOptions.find((team) => team.id === selectedTeamId)?.accounts || []);
+
+  useEffect(() => {
+    setSelectedAccountId(visibleAccounts[0]?.id || "");
+  }, [roleType, selectedTeamId]);
+
+  function handleContinue() {
+    const account = accountById(selectedAccountId);
+    const cleanPin = devicePin.trim();
+
+    if (!account) {
+      setError("Select your team and name first.");
+      return;
+    }
+    if (cleanPin && !/^\d{4,8}$/.test(cleanPin)) {
+      setError("Device PIN must be 4 to 8 digits.");
+      return;
+    }
+    if (cleanPin !== confirmPin.trim()) {
+      setError("Device PIN confirmation does not match.");
+      return;
+    }
+
+    setError("");
+    onComplete(
+      {
+        accountId: account.id,
+        name: account.name,
+        role: account.role,
+        teamId: account.teamId || null,
+      },
+      cleanPin
+    );
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 28 }}>
+      <Card style={{ width: "100%", maxWidth: 520, padding: isMobile ? 18 : 24, borderRadius: 24 }}>
+        <div style={{ display: "grid", gap: 8, marginBottom: 22 }}>
+          <div style={{ fontSize: 30, lineHeight: 1 }}>🏀</div>
+          <div style={{ fontWeight: 900, fontSize: isMobile ? 24 : 28, color: theme.text }}>League Access</div>
+          <div style={{ color: theme.muted, fontSize: 14, lineHeight: 1.5 }}>
+            Pick your team and your name once on this device. After that the app remembers you, and you can add an optional device PIN if you want a quick lock screen.
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[
+              ["member", "Team Member"],
+              ["admin", "Admin"],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setRoleType(value);
+                  setError("");
+                }}
+                style={{
+                  border: `1px solid ${roleType === value ? theme.navActiveBg : theme.borderStrong}`,
+                  background: roleType === value ? theme.navActiveBg : theme.buttonBg,
+                  color: roleType === value ? theme.navActiveText : theme.buttonText,
+                  borderRadius: 999,
+                  padding: "10px 14px",
+                  fontWeight: 800,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {roleType === "member" && (
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
+                Team
+              </label>
+              <select
+                value={selectedTeamId}
+                onChange={(event) => {
+                  setSelectedTeamId(event.target.value);
+                  setError("");
+                }}
+                style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
+              >
+                {teamOptions.map((team) => (
+                  <option key={team.id} value={team.id}>{team.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
+              {roleType === "admin" ? "Admin Profile" : "Your Name"}
+            </label>
+            <select
+              value={selectedAccountId}
+              onChange={(event) => {
+                setSelectedAccountId(event.target.value);
+                setError("");
+              }}
+              style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
+            >
+              <option value="">Select profile</option>
+              {visibleAccounts.map((account) => (
+                <option key={account.id} value={account.id}>{accountLabel(account)}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
+                Device PIN
+              </label>
+              <input
+                type="password"
+                inputMode="numeric"
+                value={devicePin}
+                onChange={(event) => {
+                  setDevicePin(event.target.value.replace(/\D/g, "").slice(0, 8));
+                  setError("");
+                }}
+                placeholder="Optional"
+                style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
+                Confirm PIN
+              </label>
+              <input
+                type="password"
+                inputMode="numeric"
+                value={confirmPin}
+                onChange={(event) => {
+                  setConfirmPin(event.target.value.replace(/\D/g, "").slice(0, 8));
+                  setError("");
+                }}
+                placeholder="Optional"
+                style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
+              />
+            </div>
+          </div>
+
+          <div style={{ color: theme.subtleText, fontSize: 12, lineHeight: 1.5 }}>
+            Only saved league members and admin profiles can enter. Device PIN is local to this phone and does not affect anyone else.
+          </div>
+
+          {error && <div style={{ color: "#dc2626", fontSize: 13, fontWeight: 700 }}>{error}</div>}
+
+          <button
+            type="button"
+            onClick={handleContinue}
+            style={{
+              border: "none",
+              background: theme.navActiveBg,
+              color: theme.navActiveText,
+              borderRadius: 16,
+              padding: "13px 16px",
+              fontWeight: 900,
+              fontSize: 14,
+              cursor: "pointer",
+            }}
+          >
+            Enter App
+          </button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function AccessUnlockGate({ isMobile, profile, onUnlock, onReset }) {
+  const theme = useTheme();
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+
+  function handleUnlock() {
+    const storedPin = getStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, "");
+    if (pin.trim() !== storedPin) {
+      setError("Wrong device PIN.");
+      setPin("");
+      return;
+    }
+    setError("");
+    onUnlock();
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 28 }}>
+      <Card style={{ width: "100%", maxWidth: 420, padding: isMobile ? 18 : 24, borderRadius: 24 }}>
+        <div style={{ display: "grid", gap: 8, marginBottom: 18 }}>
+          <div style={{ fontSize: 28, lineHeight: 1 }}>🔐</div>
+          <div style={{ fontWeight: 900, fontSize: isMobile ? 22 : 26, color: theme.text }}>Welcome back</div>
+          <div style={{ color: theme.muted, fontSize: 14 }}>
+            Signed in on this device as <strong>{profile.name}</strong>{profile.teamId ? ` · ${ownerName(profile.teamId)}` : " · Admin"}.
+          </div>
+        </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <input
+            type="password"
+            inputMode="numeric"
+            value={pin}
+            onChange={(event) => {
+              setPin(event.target.value.replace(/\D/g, "").slice(0, 8));
+              setError("");
+            }}
+            onKeyDown={(event) => event.key === "Enter" && handleUnlock()}
+            placeholder="Enter device PIN"
+            style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
+          />
+          {error && <div style={{ color: "#dc2626", fontSize: 13, fontWeight: 700 }}>{error}</div>}
+          <button
+            type="button"
+            onClick={handleUnlock}
+            style={{ border: "none", background: theme.navActiveBg, color: theme.navActiveText, borderRadius: 16, padding: "13px 16px", fontWeight: 900, fontSize: 14, cursor: "pointer" }}
+          >
+            Unlock
+          </button>
+          <button
+            type="button"
+            onClick={onReset}
+            style={{ border: `1px solid ${theme.borderStrong}`, background: theme.surfaceAlt, color: theme.text, borderRadius: 16, padding: "12px 16px", fontWeight: 800, fontSize: 13, cursor: "pointer" }}
+          >
+            Use a different profile
+          </button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function AdminView({
   source,
   games,
   isMobile,
   isTablet,
-  commentUserName,
-  commentTeam,
-  onCommentUserNameChange,
-  onCommentTeamChange,
+  accessProfile,
+  hasDevicePin,
+  onDevicePinSave,
+  onDevicePinRemove,
+  onSignOut,
   themeName,
   onThemeChange,
   textSize,
@@ -3217,14 +3520,14 @@ function AdminView({
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "flex-start" : "center", gap: 12, flexDirection: isMobile ? "column" : "row", marginBottom: 16 }}>
           <div>
-            <div style={{ fontWeight: 900, fontSize: 18 }}>Posting Profile</div>
+            <div style={{ fontWeight: 900, fontSize: 18 }}>Account</div>
             <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-              Trash Talk uses this saved identity on this device, so users can post without selecting a name and team every time.
+              This phone is signed in with one saved league identity. Trash Talk uses it automatically.
             </div>
           </div>
-          {commentUserName.trim() && commentTeam && (
-            <Badge color={teamColor(commentTeam.id).bg} textColor={teamColor(commentTeam.id).accent}>
-              {commentUserName.trim()} · {commentTeam.name}
+          {accessProfile && (
+            <Badge color={accessProfile.teamId ? teamColor(accessProfile.teamId).bg : "#e2e8f0"} textColor={accessProfile.teamId ? teamColor(accessProfile.teamId).accent : "#334155"}>
+              {accessProfile.name} · {accessProfile.teamId ? ownerName(accessProfile.teamId) : "Admin"}
             </Badge>
           )}
         </div>
@@ -3232,49 +3535,77 @@ function AdminView({
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1.1fr 1fr", gap: 12 }}>
           <div>
             <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: "#94a3b8", display: "block", marginBottom: 6 }}>
-              Display Name
+              Signed In As
             </label>
-            <input
-              value={commentUserName}
-              onChange={(event) => onCommentUserNameChange(event.target.value)}
-              placeholder="Your name"
-              maxLength={40}
-              style={{
-                width: "100%",
-                border: "1px solid #cbd5e1",
-                borderRadius: 12,
-                padding: "12px 14px",
-                fontSize: 14,
-                background: "#fff",
-              }}
-            />
+            <div style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 12, padding: "12px 14px", fontSize: 14, background: theme.surfaceAlt, color: theme.text, fontWeight: 700 }}>
+              {accessProfile ? `${accessProfile.name}${accessProfile.teamId ? ` · ${ownerName(accessProfile.teamId)}` : " · Admin"}` : "Not signed in"}
+            </div>
           </div>
           <div>
             <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: "#94a3b8", display: "block", marginBottom: 6 }}>
-              Team
+              Device PIN
             </label>
-            <select
-              value={commentTeam?.id || ""}
-              onChange={(event) => onCommentTeamChange(event.target.value)}
-              style={{
-                width: "100%",
-                border: "1px solid #cbd5e1",
-                borderRadius: 12,
-                padding: "12px 14px",
-                fontSize: 14,
-                background: "#fff",
-              }}
-            >
-              <option value="">Select your team</option>
-              {fantasyTeams.map((team) => (
-                <option key={team.id} value={team.id}>{team.name}</option>
-              ))}
-            </select>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const nextPin = window.prompt(hasDevicePin ? "Enter a new 4-8 digit device PIN" : "Set a 4-8 digit device PIN");
+                  if (!nextPin) return;
+                  onDevicePinSave(nextPin);
+                }}
+                style={{
+                  border: `1px solid ${theme.borderStrong}`,
+                  background: theme.buttonBg,
+                  color: theme.buttonText,
+                  borderRadius: 999,
+                  padding: "10px 14px",
+                  fontWeight: 800,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {hasDevicePin ? "Change PIN" : "Set PIN"}
+              </button>
+              {hasDevicePin && (
+                <button
+                  type="button"
+                  onClick={onDevicePinRemove}
+                  style={{
+                    border: `1px solid ${theme.borderStrong}`,
+                    background: theme.surfaceAlt,
+                    color: theme.text,
+                    borderRadius: 999,
+                    padding: "10px 14px",
+                    fontWeight: 800,
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  Remove PIN
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onSignOut}
+                style={{
+                  border: `1px solid ${theme.borderStrong}`,
+                  background: "#fee2e2",
+                  color: "#991b1b",
+                  borderRadius: 999,
+                  padding: "10px 14px",
+                  fontWeight: 800,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
         </div>
 
         <div style={{ marginTop: 12, color: "#94a3b8", fontSize: 12 }}>
-          Pins/passwords are not enforced yet. Right now this is a saved local posting profile; if you want real user auth next, I can add it.
+          The saved league identity lives on this device. Device PIN is optional and only locks this phone or browser.
         </div>
       </Card>
 
@@ -3434,8 +3765,13 @@ export default function App() {
   const [comments, setComments] = useState([]);
   const [commentsError, setCommentsError] = useState("");
   const [lastSeenCommentAt, setLastSeenCommentAt] = useState(() => getStoredValue(COMMENT_LAST_SEEN_STORAGE_KEY, ""));
-  const [commentUserName, setCommentUserName] = useState(() => getStoredValue(COMMENT_USER_STORAGE_KEY, ""));
-  const [commentTeamId, setCommentTeamId] = useState(() => getStoredValue(COMMENT_TEAM_STORAGE_KEY, ""));
+  const [accessProfile, setAccessProfile] = useState(() =>
+    normalizeAccessProfile(getStoredJson(ACCESS_PROFILE_STORAGE_KEY, null))
+  );
+  const [accessUnlocked, setAccessUnlocked] = useState(() => {
+    const storedPin = getStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, "");
+    return !storedPin || getSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "") === "true";
+  });
   const [notificationSettings, setNotificationSettings] = useState(() => ({
     ...DEFAULT_NOTIFICATION_SETTINGS,
     ...getStoredJson(NOTIFICATION_SETTINGS_STORAGE_KEY, {}),
@@ -3464,7 +3800,8 @@ export default function App() {
   const gamesHydratedRef = useRef(false);
   const previousGameStatusRef = useRef({});
   const previousLeaderIdRef = useRef("");
-  const commentTeam = fantasyTeams.find((team) => team.id === commentTeamId) || null;
+  const commentUserName = accessProfile?.name || "";
+  const commentTeam = accessProfile?.teamId ? fantasyTeams.find((team) => team.id === accessProfile.teamId) || null : null;
   const handleOpenOwnership = (teamId) => {
     setOwnershipFilter(teamId || "all");
     setTab("Ownership");
@@ -3472,13 +3809,44 @@ export default function App() {
   const handleOpenComments = () => {
     setTab("Trash Talk");
   };
-  const handleCommentUserNameChange = (value) => {
-    setCommentUserName(value);
-    setStoredValue(COMMENT_USER_STORAGE_KEY, value);
+  const completeAccessSetup = (profile, devicePin) => {
+    const normalized = normalizeAccessProfile(profile);
+    if (!normalized) return;
+    setAccessProfile(normalized);
+    setAccessUnlocked(true);
+    try {
+      localStorage.setItem(ACCESS_PROFILE_STORAGE_KEY, JSON.stringify(normalized));
+    } catch {}
+    setStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, devicePin);
+    setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "true");
   };
-  const handleCommentTeamChange = (teamId) => {
-    setCommentTeamId(teamId);
-    setStoredValue(COMMENT_TEAM_STORAGE_KEY, teamId);
+  const unlockAccess = () => {
+    setAccessUnlocked(true);
+    setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "true");
+  };
+  const resetAccessProfile = () => {
+    setAccessProfile(null);
+    setAccessUnlocked(false);
+    setTab("Standings");
+    setOwnershipFilter("all");
+    setStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, "");
+    setStoredValue(ACCESS_PROFILE_STORAGE_KEY, "");
+    setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "");
+  };
+  const saveDevicePin = (nextPin) => {
+    const cleanPin = String(nextPin || "").replace(/\D/g, "").slice(0, 8);
+    if (!/^\d{4,8}$/.test(cleanPin)) {
+      window.alert("Device PIN must be 4 to 8 digits.");
+      return;
+    }
+    setStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, cleanPin);
+    setAccessUnlocked(true);
+    setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "true");
+  };
+  const removeDevicePin = () => {
+    setStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, "");
+    setAccessUnlocked(true);
+    setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "true");
   };
   const updateNotificationSettings = (key, value) => {
     setNotificationSettings((current) => {
@@ -3624,6 +3992,7 @@ export default function App() {
     commentMentionsUser(comment.message, commentUserName)
   ).length;
   const unreadNotificationCount = notifications.filter((notification) => !notification.read).length;
+  const hasDevicePin = Boolean(getStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, ""));
 
   useEffect(() => {
     if (!commentsHydratedRef.current) {
@@ -3757,6 +4126,36 @@ export default function App() {
     upsertComments(data.comment);
     setCommentsError("");
   };
+
+  if (!accessProfile) {
+    return (
+      <ThemeContext.Provider value={theme}>
+        <>
+          <style>{`
+            * { box-sizing: border-box; }
+            body { margin: 0; background: ${theme.pageBg}; color: ${theme.text}; font-family: 'Inter', system-ui, sans-serif; }
+            button, select, input, textarea { font-family: inherit; }
+          `}</style>
+          <AccessSetupGate isMobile={isMobile} onComplete={completeAccessSetup} />
+        </>
+      </ThemeContext.Provider>
+    );
+  }
+
+  if (hasDevicePin && !accessUnlocked) {
+    return (
+      <ThemeContext.Provider value={theme}>
+        <>
+          <style>{`
+            * { box-sizing: border-box; }
+            body { margin: 0; background: ${theme.pageBg}; color: ${theme.text}; font-family: 'Inter', system-ui, sans-serif; }
+            button, select, input, textarea { font-family: inherit; }
+          `}</style>
+          <AccessUnlockGate isMobile={isMobile} profile={accessProfile} onUnlock={unlockAccess} onReset={resetAccessProfile} />
+        </>
+      </ThemeContext.Provider>
+    );
+  }
 
   return (
     <ThemeContext.Provider value={theme}>
@@ -3900,10 +4299,11 @@ export default function App() {
               games={games}
               isMobile={isMobile}
               isTablet={isTablet}
-              commentUserName={commentUserName}
-              commentTeam={commentTeam}
-              onCommentUserNameChange={handleCommentUserNameChange}
-              onCommentTeamChange={handleCommentTeamChange}
+              accessProfile={accessProfile}
+              hasDevicePin={hasDevicePin}
+              onDevicePinSave={saveDevicePin}
+              onDevicePinRemove={removeDevicePin}
+              onSignOut={resetAccessProfile}
               themeName={themeName}
               onThemeChange={updateThemeName}
               textSize={textSize}
