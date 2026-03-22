@@ -1,5 +1,6 @@
 const fs = require("fs/promises");
 const path = require("path");
+const crypto = require("crypto");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 require("dotenv").config();
 const express = require("express");
@@ -7,7 +8,7 @@ const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "32kb" }));
 const frontendDistDir = path.join(__dirname, "..", "frontend", "dist");
 
@@ -18,11 +19,74 @@ let nextCommentId = 1;
 const PORT = Number(process.env.PORT) || 4000;
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SESSION_COOKIE_NAME = "league_session";
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 180;
+const LOGIN_WINDOW_MS = 1000 * 60 * 15;
+const MAX_LOGIN_ATTEMPTS = 8;
+const SESSION_SECRET = process.env.ACCESS_SESSION_SECRET || (process.env.NODE_ENV === "production" ? "" : "dev-only-league-session-secret");
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
   : null;
+const loginAttempts = new Map();
+const fantasyTeams = [
+  { id: "mike-bob", name: "Mike / Bob", members: ["Mike W.", "Bob"] },
+  { id: "solomon-brenden", name: "Solomon / Brenden", members: ["Solomon", "Brenden"] },
+  { id: "dan-chris", name: "Dan / Chris", members: ["Dan", "Chris"] },
+  { id: "ryan-brian", name: "Ryan / Brian", members: ["Ryan", "Brian"] },
+  { id: "mikea-gregg", name: "Mike A / Gregg", members: ["Mike A.", "Gregg"] },
+  { id: "josh-gabe", name: "Josh / Gabe", members: ["Josh", "Gabe"] },
+];
+const adminAccounts = [
+  { id: "admin-ariel", name: "Ariel", role: "admin", teamId: null },
+  { id: "admin-commissioner", name: "Commissioner", role: "admin", teamId: null },
+];
+const leagueMemberAccounts = fantasyTeams.flatMap((team) =>
+  team.members.map((member) => ({
+    id: `${team.id}:${member.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+    name: member,
+    teamId: team.id,
+    role: "member",
+  }))
+);
+const leagueAccessAccounts = [...leagueMemberAccounts, ...adminAccounts];
+const accountMap = new Map(leagueAccessAccounts.map((account) => [account.id, account]));
+
+function loadAccessPins() {
+  const raw = process.env.ACCESS_PINS_JSON || "";
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return Object.fromEntries(
+          Object.entries(parsed)
+            .map(([key, value]) => [String(key), cleanText(value, 32)])
+            .filter(([, value]) => value)
+        );
+      }
+    } catch (error) {
+      console.error("ACCESS_PINS_JSON is not valid JSON:", error);
+    }
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    return {
+      "mike-bob": "1101",
+      "solomon-brenden": "1102",
+      "dan-chris": "1103",
+      "ryan-brian": "1104",
+      "mikea-gregg": "1105",
+      "josh-gabe": "1106",
+      "admin-ariel": "9901",
+      "admin-commissioner": "9902",
+    };
+  }
+
+  return {};
+}
+
+const accessPins = loadAccessPins();
 
 const teamNameMap = {
   "Connecticut Huskies": "UConn",
@@ -85,6 +149,171 @@ function cleanText(value, maxLength) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLength);
+}
+
+function cookieSerialize(name, value, options = {}) {
+  const parts = [`${name}=${encodeURIComponent(value)}`];
+  if (options.maxAge !== undefined) parts.push(`Max-Age=${Math.floor(options.maxAge / 1000)}`);
+  if (options.path) parts.push(`Path=${options.path}`);
+  if (options.httpOnly) parts.push("HttpOnly");
+  if (options.secure) parts.push("Secure");
+  if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
+  return parts.join("; ");
+}
+
+function parseCookies(header = "") {
+  return Object.fromEntries(
+    String(header)
+      .split(";")
+      .map((chunk) => chunk.trim())
+      .filter(Boolean)
+      .map((chunk) => {
+        const index = chunk.indexOf("=");
+        if (index < 0) return [chunk, ""];
+        return [chunk.slice(0, index), decodeURIComponent(chunk.slice(index + 1))];
+      })
+  );
+}
+
+function base64UrlEncode(value) {
+  return Buffer.from(value).toString("base64url");
+}
+
+function base64UrlDecode(value) {
+  return Buffer.from(value, "base64url").toString("utf8");
+}
+
+function signValue(value) {
+  return crypto.createHmac("sha256", SESSION_SECRET).update(value).digest("base64url");
+}
+
+function buildSessionToken(profile) {
+  const payload = {
+    accountId: profile.accountId,
+    name: profile.name,
+    role: profile.role,
+    teamId: profile.teamId || null,
+    issuedAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  };
+  const encoded = base64UrlEncode(JSON.stringify(payload));
+  return `${encoded}.${signValue(encoded)}`;
+}
+
+function verifySessionToken(token) {
+  if (!token || !SESSION_SECRET) return null;
+  const [encoded, signature] = String(token).split(".");
+  if (!encoded || !signature) return null;
+  const expected = signValue(encoded);
+  if (signature.length !== expected.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+
+  try {
+    const payload = JSON.parse(base64UrlDecode(encoded));
+    if (!payload || typeof payload !== "object") return null;
+    if (!payload.accountId || payload.expiresAt < Date.now()) return null;
+    const account = accountMap.get(payload.accountId);
+    if (!account) return null;
+    return {
+      accountId: account.id,
+      name: account.name,
+      role: account.role,
+      teamId: account.teamId || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sessionCookieOptions() {
+  return {
+    maxAge: SESSION_TTL_MS,
+    path: "/",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Lax",
+  };
+}
+
+function setSessionCookie(res, profile) {
+  res.setHeader("Set-Cookie", cookieSerialize(SESSION_COOKIE_NAME, buildSessionToken(profile), sessionCookieOptions()));
+}
+
+function clearSessionCookie(res) {
+  res.setHeader(
+    "Set-Cookie",
+    cookieSerialize(SESSION_COOKIE_NAME, "", {
+      maxAge: 0,
+      path: "/",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Lax",
+    })
+  );
+}
+
+function currentSession(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
+  return verifySessionToken(cookies[SESSION_COOKIE_NAME]);
+}
+
+function requireAuth(req, res, next) {
+  const session = currentSession(req);
+  if (!session) {
+    res.status(401).json({ error: "League login required." });
+    return;
+  }
+  req.auth = session;
+  next();
+}
+
+function loginAttemptKey(req) {
+  return req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() || req.socket.remoteAddress || "unknown";
+}
+
+function isRateLimited(key) {
+  const current = loginAttempts.get(key);
+  if (!current) return false;
+  if (current.resetAt <= Date.now()) {
+    loginAttempts.delete(key);
+    return false;
+  }
+  return current.count >= MAX_LOGIN_ATTEMPTS;
+}
+
+function recordFailedAttempt(key) {
+  const current = loginAttempts.get(key);
+  if (!current || current.resetAt <= Date.now()) {
+    loginAttempts.set(key, { count: 1, resetAt: Date.now() + LOGIN_WINDOW_MS });
+    return;
+  }
+  current.count += 1;
+}
+
+function clearFailedAttempts(key) {
+  loginAttempts.delete(key);
+}
+
+function safePinEqual(left, right) {
+  if (!left || !right) return false;
+  const a = Buffer.from(String(left));
+  const b = Buffer.from(String(right));
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function loginProfileForAccount(account) {
+  return {
+    accountId: account.id,
+    name: account.name,
+    role: account.role,
+    teamId: account.teamId || null,
+  };
+}
+
+function expectedPinForAccount(account) {
+  if (!account) return "";
+  return cleanText(accessPins[account.role === "admin" ? account.id : account.teamId], 32);
 }
 
 function broadcastNamesFromCompetition(comp) {
@@ -246,7 +475,50 @@ async function saveCommentsToDisk() {
   await fs.rename(tempFile, COMMENTS_FILE);
 }
 
-app.get("/api/comments", (req, res) => {
+app.post("/api/access/login", (req, res) => {
+  if (!SESSION_SECRET) {
+    res.status(503).json({ error: "League access is not configured yet." });
+    return;
+  }
+
+  const key = loginAttemptKey(req);
+  if (isRateLimited(key)) {
+    res.status(429).json({ error: "Too many login attempts. Wait a bit and try again." });
+    return;
+  }
+
+  const accountId = cleanText(req.body?.accountId, 80);
+  const accessPin = cleanText(req.body?.accessPin, 32);
+  const account = accountMap.get(accountId);
+  const expectedPin = expectedPinForAccount(account);
+
+  if (!account || !accessPin || !expectedPin || !safePinEqual(accessPin, expectedPin)) {
+    recordFailedAttempt(key);
+    res.status(401).json({ error: "That team/admin PIN is wrong." });
+    return;
+  }
+
+  clearFailedAttempts(key);
+  const profile = loginProfileForAccount(account);
+  setSessionCookie(res, profile);
+  res.json({ profile });
+});
+
+app.get("/api/access/session", (req, res) => {
+  const session = currentSession(req);
+  if (!session) {
+    res.status(401).json({ error: "No active league session." });
+    return;
+  }
+  res.json({ profile: session });
+});
+
+app.post("/api/access/logout", (req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.get("/api/comments", requireAuth, (req, res) => {
   const teamId = cleanText(req.query.teamId, 64) || null;
   listComments(teamId)
     .then((list) => {
@@ -261,11 +533,8 @@ app.get("/api/comments", (req, res) => {
     });
 });
 
-app.post("/api/comments", async (req, res) => {
+app.post("/api/comments", requireAuth, async (req, res) => {
   const message = cleanText(req.body?.message, 400);
-  const authorName = cleanText(req.body?.authorName, 40) || "Guest";
-  const authorTeamId = cleanText(req.body?.authorTeamId, 64) || null;
-  const teamId = cleanText(req.body?.teamId, 64) || null;
   const clientId = cleanText(req.body?.clientId, 64) || null;
   const replyToId = cleanText(req.body?.replyToId, 64) || null;
 
@@ -296,9 +565,9 @@ app.post("/api/comments", async (req, res) => {
   try {
     const comment = await createComment({
       message,
-      authorName,
-      authorTeamId,
-      teamId,
+      authorName: req.auth.name,
+      authorTeamId: req.auth.teamId || null,
+      teamId: req.auth.teamId || null,
       clientId,
       replyToId,
     });
@@ -310,7 +579,7 @@ app.post("/api/comments", async (req, res) => {
   }
 });
 
-app.patch("/api/comments/:id", async (req, res) => {
+app.patch("/api/comments/:id", requireAuth, async (req, res) => {
   const commentId = cleanText(req.params.id, 64);
   const message = cleanText(req.body?.message, 400);
   const clientId = cleanText(req.body?.clientId, 64);
@@ -345,7 +614,7 @@ app.patch("/api/comments/:id", async (req, res) => {
   }
 });
 
-app.get("/api/league-state", async (req, res) => {
+app.get("/api/league-state", requireAuth, async (req, res) => {
   try {
     const dateKeys = buildDateKeys(new Date(2026, 2, 18));
     const payloads = await Promise.all(

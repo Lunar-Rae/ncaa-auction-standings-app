@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const MOBILE_BREAKPOINT = 760;
@@ -224,7 +223,6 @@ const initialFantasyTeams = [
 const fantasyTeams = initialFantasyTeams;
 const adminAccounts = [
   { id: "admin-ariel", name: "Ariel", role: "admin" },
-  { id: "admin-lunar-rae", name: "Lunar Rae", role: "admin" },
   { id: "admin-commissioner", name: "Commissioner", role: "admin" },
 ];
 const leagueMemberAccounts = fantasyTeams.flatMap((team) =>
@@ -3243,8 +3241,10 @@ function AccessSetupGate({ isMobile, onComplete }) {
   const [roleType, setRoleType] = useState("member");
   const [selectedTeamId, setSelectedTeamId] = useState(fantasyTeams[0]?.id || "");
   const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [accessPin, setAccessPin] = useState("");
   const [devicePin, setDevicePin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const teamOptions = fantasyTeams.map((team) => ({
@@ -3260,12 +3260,16 @@ function AccessSetupGate({ isMobile, onComplete }) {
     setSelectedAccountId(visibleAccounts[0]?.id || "");
   }, [roleType, selectedTeamId]);
 
-  function handleContinue() {
+  async function handleContinue() {
     const account = accountById(selectedAccountId);
     const cleanPin = devicePin.trim();
 
     if (!account) {
       setError("Select your team and name first.");
+      return;
+    }
+    if (!/^\d{4,8}$/.test(accessPin.trim())) {
+      setError(`${roleType === "admin" ? "Admin" : "Team"} PIN must be 4 to 8 digits.`);
       return;
     }
     if (cleanPin && !/^\d{4,8}$/.test(cleanPin)) {
@@ -3277,16 +3281,21 @@ function AccessSetupGate({ isMobile, onComplete }) {
       return;
     }
 
+    setLoading(true);
     setError("");
-    onComplete(
-      {
+
+    try {
+      await onComplete({
         accountId: account.id,
-        name: account.name,
-        role: account.role,
-        teamId: account.teamId || null,
-      },
-      cleanPin
-    );
+        accessPin: accessPin.trim(),
+        devicePin: cleanPin,
+      });
+    } catch (submitError) {
+      setError(submitError.message || "Unable to enter the app right now.");
+      setAccessPin("");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -3296,7 +3305,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
           <div style={{ fontSize: 30, lineHeight: 1 }}>🏀</div>
           <div style={{ fontWeight: 900, fontSize: isMobile ? 24 : 28, color: theme.text }}>League Access</div>
           <div style={{ color: theme.muted, fontSize: 14, lineHeight: 1.5 }}>
-            Pick your team and your name once on this device. After that the app remembers you, and you can add an optional device PIN if you want a quick lock screen.
+            Pick your team and your name, then enter the league PIN tied to that team or admin profile. After that this device remembers you, and if you set a device PIN, future unlocks on this device are PIN-only.
           </div>
         </div>
 
@@ -3368,6 +3377,23 @@ function AccessSetupGate({ isMobile, onComplete }) {
             </select>
           </div>
 
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
+              {roleType === "admin" ? "Admin PIN" : "Team PIN"}
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              value={accessPin}
+              onChange={(event) => {
+                setAccessPin(event.target.value.replace(/\D/g, "").slice(0, 8));
+                setError("");
+              }}
+              placeholder="Required"
+              style={{ width: "100%", border: `1px solid ${theme.borderStrong}`, borderRadius: 14, padding: "12px 14px", fontSize: 14, background: theme.inputBg, color: theme.inputText }}
+            />
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
             <div>
               <label style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".06em", color: theme.subtleText, display: "block", marginBottom: 6 }}>
@@ -3404,7 +3430,7 @@ function AccessSetupGate({ isMobile, onComplete }) {
           </div>
 
           <div style={{ color: theme.subtleText, fontSize: 12, lineHeight: 1.5 }}>
-            Only saved league members and admin profiles can enter. Device PIN is local to this phone and does not affect anyone else.
+            Only saved league members and admin profiles can enter. The team/admin PIN is checked by the server. Device PIN is local to this phone and only unlocks this device after you already belong in the league.
           </div>
 
           {error && <div style={{ color: "#dc2626", fontSize: 13, fontWeight: 700 }}>{error}</div>}
@@ -3420,10 +3446,12 @@ function AccessSetupGate({ isMobile, onComplete }) {
               padding: "13px 16px",
               fontWeight: 900,
               fontSize: 14,
-              cursor: "pointer",
+              cursor: loading ? "wait" : "pointer",
+              opacity: loading ? 0.7 : 1,
             }}
+            disabled={loading}
           >
-            Enter App
+            {loading ? "Checking League Access..." : "Enter App"}
           </button>
         </div>
       </Card>
@@ -3768,6 +3796,7 @@ export default function App() {
   const [accessProfile, setAccessProfile] = useState(() =>
     normalizeAccessProfile(getStoredJson(ACCESS_PROFILE_STORAGE_KEY, null))
   );
+  const [authChecked, setAuthChecked] = useState(false);
   const [accessUnlocked, setAccessUnlocked] = useState(() => {
     const storedPin = getStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, "");
     return !storedPin || getSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "") === "true";
@@ -3802,6 +3831,31 @@ export default function App() {
   const previousLeaderIdRef = useRef("");
   const commentUserName = accessProfile?.name || "";
   const commentTeam = accessProfile?.teamId ? fantasyTeams.find((team) => team.id === accessProfile.teamId) || null : null;
+  const clearLocalAccess = ({ clearDevicePin = true } = {}) => {
+    setAccessProfile(null);
+    setAccessUnlocked(false);
+    setTab("Standings");
+    setOwnershipFilter("all");
+    if (clearDevicePin) setStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, "");
+    setStoredValue(ACCESS_PROFILE_STORAGE_KEY, "");
+    setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "");
+  };
+  const apiFetch = async (endpoint, options = {}) => {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      credentials: "include",
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+      },
+    });
+
+    if (response.status === 401) {
+      clearLocalAccess();
+      throw new Error("League session expired. Log in again.");
+    }
+
+    return response;
+  };
   const handleOpenOwnership = (teamId) => {
     setOwnershipFilter(teamId || "all");
     setTab("Ownership");
@@ -3809,9 +3863,19 @@ export default function App() {
   const handleOpenComments = () => {
     setTab("Trash Talk");
   };
-  const completeAccessSetup = (profile, devicePin) => {
-    const normalized = normalizeAccessProfile(profile);
-    if (!normalized) return;
+  const completeAccessSetup = async ({ accountId, accessPin, devicePin }) => {
+    const res = await apiFetch("/api/access/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountId, accessPin }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || "Unable to verify league access.");
+    }
+
+    const normalized = normalizeAccessProfile(data.profile);
+    if (!normalized) throw new Error("League access profile is invalid.");
     setAccessProfile(normalized);
     setAccessUnlocked(true);
     try {
@@ -3824,14 +3888,13 @@ export default function App() {
     setAccessUnlocked(true);
     setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "true");
   };
-  const resetAccessProfile = () => {
-    setAccessProfile(null);
-    setAccessUnlocked(false);
-    setTab("Standings");
-    setOwnershipFilter("all");
-    setStoredValue(ACCESS_DEVICE_PIN_STORAGE_KEY, "");
-    setStoredValue(ACCESS_PROFILE_STORAGE_KEY, "");
-    setSessionValue(ACCESS_UNLOCKED_SESSION_KEY, "");
+  const resetAccessProfile = async () => {
+    try {
+      await apiFetch("/api/access/logout", { method: "POST" });
+    } catch {
+      // Ignore logout transport failures and still clear local state.
+    }
+    clearLocalAccess();
   };
   const saveDevicePin = (nextPin) => {
     const cleanPin = String(nextPin || "").replace(/\D/g, "").slice(0, 8);
@@ -3892,33 +3955,71 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
+    const restoreSession = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/access/session`, { credentials: "include" });
+        const data = await res.json().catch(() => ({}));
+        if (!mounted) return;
+        if (res.ok) {
+          const normalized = normalizeAccessProfile(data.profile);
+          if (normalized) {
+            setAccessProfile(normalized);
+            try {
+              localStorage.setItem(ACCESS_PROFILE_STORAGE_KEY, JSON.stringify(normalized));
+            } catch {}
+          } else {
+            clearLocalAccess();
+          }
+        } else {
+          clearLocalAccess();
+        }
+      } catch {
+        if (!mounted) return;
+        clearLocalAccess({ clearDevicePin: false });
+      } finally {
+        if (mounted) setAuthChecked(true);
+      }
+    };
+
+    restoreSession();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authChecked || !accessProfile) return;
+    let mounted = true;
     const load = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/league-state`);
+        const res = await apiFetch("/api/league-state");
         const data = await res.json();
         if (!mounted) return;
         setGames(Array.isArray(data.games) && data.games.length ? data.games : demoGames);
         setSource(data.source || "Live");
         setUpdatedAt(data.updatedAt || new Date().toISOString());
         setError("");
-      } catch {
+      } catch (loadError) {
         if (!mounted) return;
         setGames(demoGames);
         setSource("Demo");
         setUpdatedAt(new Date().toISOString());
-        setError("Live feed unavailable — showing March 19 results");
+        setError(loadError.message === "League session expired. Log in again."
+          ? loadError.message
+          : "Live feed unavailable — showing March 19 results");
       }
     };
     load();
     const id = setInterval(load, 15000);
     return () => { mounted = false; clearInterval(id); };
-  }, []);
+  }, [authChecked, accessProfile]);
 
   useEffect(() => {
+    if (!authChecked || !accessProfile) return;
     let mounted = true;
     const loadComments = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/comments`);
+        const res = await apiFetch("/api/comments");
         const data = await res.json();
         if (!mounted) return;
         setComments(
@@ -3929,48 +4030,21 @@ export default function App() {
           )
         );
         setCommentsError("");
-      } catch {
+      } catch (loadError) {
         if (!mounted) return;
-        setCommentsError("Chat unavailable right now.");
+        setCommentsError(loadError.message === "League session expired. Log in again."
+          ? loadError.message
+          : "Chat unavailable right now.");
       }
     };
 
     loadComments();
-    if (isSupabaseConfigured && supabase) {
-      const channel = supabase
-        .channel("comments-feed")
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "comments" },
-          (payload) => {
-            if (!mounted) return;
-            upsertComments(payload.new);
-            setCommentsError("");
-          }
-        )
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "comments" },
-          (payload) => {
-            if (!mounted) return;
-            upsertComments(payload.new);
-            setCommentsError("");
-          }
-        )
-        .subscribe();
-
-      return () => {
-        mounted = false;
-        supabase.removeChannel(channel);
-      };
-    }
-
     const id = setInterval(loadComments, COMMENT_POLL_MS);
     return () => {
       mounted = false;
       clearInterval(id);
     };
-  }, []);
+  }, [authChecked, accessProfile]);
 
   const standings = useMemo(() => standingsFromGames(games), [games]);
   const headerLeaderboard = standings.slice(0, 6);
@@ -4090,13 +4164,10 @@ export default function App() {
   }, [tab, comments.length]);
 
   const handleSubmitComment = async ({ authorName, authorTeamId, teamId, replyToId, message }) => {
-    const res = await fetch(`${API_BASE_URL}/api/comments`, {
+    const res = await apiFetch("/api/comments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        authorName,
-        authorTeamId,
-        teamId,
         replyToId,
         message,
         clientId: commentClientId,
@@ -4111,7 +4182,7 @@ export default function App() {
   };
 
   const handleEditComment = async ({ commentId, message }) => {
-    const res = await fetch(`${API_BASE_URL}/api/comments/${commentId}`, {
+    const res = await apiFetch(`/api/comments/${commentId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4126,6 +4197,25 @@ export default function App() {
     upsertComments(data.comment);
     setCommentsError("");
   };
+
+  if (!authChecked) {
+    return (
+      <ThemeContext.Provider value={theme}>
+        <>
+          <style>{`
+            * { box-sizing: border-box; }
+            body { margin: 0; background: ${theme.pageBg}; color: ${theme.text}; font-family: 'Inter', system-ui, sans-serif; }
+          `}</style>
+          <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 16 : 28 }}>
+            <Card style={{ width: "100%", maxWidth: 380, padding: 22, borderRadius: 24, textAlign: "center" }}>
+              <div style={{ fontSize: 28, marginBottom: 10 }}>🔒</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: theme.text }}>Checking League Access</div>
+            </Card>
+          </div>
+        </>
+      </ThemeContext.Provider>
+    );
+  }
 
   if (!accessProfile) {
     return (
